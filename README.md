@@ -12,7 +12,7 @@ Adds a search box to every crafting station (workbench, forge, cauldron, artisan
 
 ## Configuration
 
-`BepInEx/config/com.jaredweiss.valfilter.cfg`
+`BepInEx/config/com.placidfireball.valfilter.cfg`
 
 | Setting | Default | Description |
 | --- | --- | --- |
