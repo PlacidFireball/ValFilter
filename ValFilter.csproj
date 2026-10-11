@@ -1,9 +1,68 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+    <!-- Valheim runs on Unity's Mono runtime; plugins must target netstandard2.1 (or net48). -->
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>ValFilter</AssemblyName>
+    <RootNamespace>ValFilter</RootNamespace>
+    <!-- Don't emit a .deps.json; BepInEx doesn't use it. -->
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <!-- Unity's BCL facades differ from netstandard's; the mismatch is harmless at runtime. -->
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
+
+    <!-- Override on the command line or in a Directory.Build.props if your install lives elsewhere. -->
+    <ValheimDir Condition="'$(ValheimDir)' == ''">D:\SteamLibrary\steamapps\common\Valheim</ValheimDir>
+    <ValheimManaged>$(ValheimDir)\valheim_Data\Managed</ValheimManaged>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BepInEx / Harmony (vendored in lib/) -->
+    <Reference Include="BepInEx" HintPath="lib\BepInEx.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="lib\0Harmony.dll" Private="false" />
+
+    <!-- Game assemblies -->
+    <Reference Include="assembly_valheim" HintPath="$(ValheimManaged)\assembly_valheim.dll" Private="false" />
+    <Reference Include="assembly_guiutils" HintPath="$(ValheimManaged)\assembly_guiutils.dll" Private="false" />
+    <Reference Include="assembly_utils" HintPath="$(ValheimManaged)\assembly_utils.dll" Private="false" />
+    <Reference Include="gui_framework" HintPath="$(ValheimManaged)\gui_framework.dll" Private="false" />
+
+    <!-- Unity -->
+    <Reference Include="UnityEngine" HintPath="$(ValheimManaged)\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(ValheimManaged)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="$(ValheimManaged)\UnityEngine.UI.dll" Private="false" />
+    <Reference Include="UnityEngine.UIModule" HintPath="$(ValheimManaged)\UnityEngine.UIModule.dll" Private="false" />
+    <Reference Include="Unity.TextMeshPro" HintPath="$(ValheimManaged)\Unity.TextMeshPro.dll" Private="false" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- Keep in sync with pluginVersion in ValFilter.cs and version_number in Thunderstore/manifest.json. -->
+    <Version>0.1.0</Version>
+
+    <!-- Thunderstore Mod Manager profile to deploy into for testing. Override per machine if needed. -->
+    <ModProfile Condition="'$(ModProfile)' == ''">Multiplayer With Gavin</ModProfile>
+    <ModProfileDir>$(AppData)\Thunderstore Mod Manager\DataFolder\Valheim\profiles\$(ModProfile)</ModProfileDir>
+    <PluginDeployDir>$(ModProfileDir)\BepInEx\plugins\ValFilter</PluginDeployDir>
+  </PropertyGroup>
+
+  <!-- Copy the built plugin into the mod manager profile, so "Start modded" picks it up. -->
+  <Target Name="DeployToProfile" AfterTargets="Build" Condition="Exists('$(ModProfileDir)\BepInEx')">
+    <MakeDir Directories="$(PluginDeployDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" />
+    <Message Importance="high" Text="ValFilter -> $(PluginDeployDir)" />
+  </Target>
+
+  <!-- On Release builds, produce an upload-ready Thunderstore zip in bin\Thunderstore\. -->
+  <Target Name="PackageThunderstore" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <TsStage>$(IntermediateOutputPath)thunderstore\</TsStage>
+      <TsOut>$(MSBuildProjectDirectory)\bin\Thunderstore</TsOut>
+    </PropertyGroup>
+    <RemoveDir Directories="$(TsStage)" />
+    <Copy SourceFiles="Thunderstore\manifest.json;Thunderstore\icon.png;README.md;$(TargetPath)" DestinationFolder="$(TsStage)" />
+    <MakeDir Directories="$(TsOut)" />
+    <ZipDirectory SourceDirectory="$(TsStage)" DestinationFile="$(TsOut)\ValFilter-$(Version).zip" Overwrite="true" />
+    <Message Importance="high" Text="Thunderstore package -> $(TsOut)\ValFilter-$(Version).zip" />
+  </Target>
 
 </Project>
