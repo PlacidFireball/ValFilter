@@ -1,6 +1,6 @@
 {
   "name": "ValFilter",
-  "version_number": "0.1.1",
+  "version_number": "0.2.1",
   "website_url": "https://github.com/PlacidFireball/ValFilter",
   "description": "Adds a search box to every crafting station so you can filter recipes by name.",
   "dependencies": [

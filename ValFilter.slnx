@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="ValFilter.csproj" />
+  <Project Path="ValFilter.Tests/ValFilter.Tests.csproj" />
 </Solution>

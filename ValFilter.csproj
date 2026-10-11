@@ -17,6 +17,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The test project lives in a subfolder; keep the SDK's default glob from compiling it into the plugin. -->
+    <Compile Remove="ValFilter.Tests\**" />
+    <None Remove="ValFilter.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- BepInEx / Harmony (vendored in lib/) -->
     <Reference Include="BepInEx" HintPath="lib\BepInEx.dll" Private="false" />
     <Reference Include="0Harmony" HintPath="lib\0Harmony.dll" Private="false" />
@@ -37,7 +43,7 @@
 
   <PropertyGroup>
     <!-- Keep in sync with pluginVersion in ValFilter.cs and version_number in Thunderstore/manifest.json. -->
-    <Version>0.1.1</Version>
+    <Version>0.2.1</Version>
 
     <!-- Thunderstore Mod Manager profile to deploy into for testing. Override per machine if needed. -->
     <ModProfile Condition="'$(ModProfile)' == ''">Multiplayer With Gavin</ModProfile>

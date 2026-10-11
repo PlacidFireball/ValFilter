@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
@@ -17,7 +17,7 @@ namespace ValFilter
     {
         const string pluginGUID = "com.placidfireball.valfilter";
         const string pluginName = "ValFilter";
-        const string pluginVersion = "0.1.1";
+        const string pluginVersion = "0.2.1";
 
         private readonly Harmony HarmonyInstance = new Harmony(pluginGUID);
 
@@ -27,9 +27,17 @@ namespace ValFilter
         public static ConfigEntry<float> SearchWidth;
         public static ConfigEntry<Vector2> SearchOffset;
         public static ConfigEntry<KeyCode> FocusKey;
+        public static ConfigEntry<SearchMode> SearchMode;
+        public static ConfigEntry<bool> TypoTolerance;
 
         public void Awake()
         {
+            SearchMode = Config.Bind("Search", "Mode", ValFilter.SearchMode.Substring,
+                "Substring: the name must contain exactly what you typed, in the game's usual order. " +
+                "Fuzzy (opt-in): letters in order, not necessarily adjacent (\"bzarw\" finds Bronzehead arrow), best matches first.");
+            TypoTolerance = Config.Bind("Search", "TypoTolerance", true,
+                "Fuzzy mode only: also match words of 4+ letters with a typo or two (\"baer\" finds Bear). " +
+                "Typo matches are listed after exact ones.");
             ClearOnClose = Config.Bind("General", "ClearOnClose", true,
                 "Clear the search text whenever the inventory/crafting panel closes.");
             FocusKey = Config.Bind("General", "FocusKey", KeyCode.F,
@@ -49,10 +57,17 @@ namespace ValFilter
         }
     }
 
+    public enum SearchMode
+    {
+        Fuzzy,
+        Substring,
+    }
+
     internal static class RecipeSearch
     {
         private static GuiInputField searchField;
         private static string term = "";
+        private static FuzzyMatcher.Query query = new FuzzyMatcher.Query("");
 
         public static bool HasFocus => searchField != null && searchField.isFocused;
 
@@ -112,6 +127,7 @@ namespace ValFilter
         public static void Clear()
         {
             term = "";
+            query = new FuzzyMatcher.Query("");
             if (searchField != null)
             {
                 searchField.SetTextWithoutNotify("");
@@ -122,6 +138,7 @@ namespace ValFilter
         private static void OnSearchChanged(string value)
         {
             term = value.Trim();
+            query = new FuzzyMatcher.Query(term);
             var gui = InventoryGui.instance;
             if (gui != null && InventoryGui.IsVisible())
                 ApplyFilter(gui, reselect: true);
@@ -141,6 +158,7 @@ namespace ValFilter
         private static readonly Type recipeDataPairType = AccessTools.Inner(typeof(InventoryGui), "RecipeDataPair");
         private static readonly PropertyInfo pairRecipeProp = AccessTools.Property(recipeDataPairType, "Recipe");
         private static readonly PropertyInfo pairElementProp = AccessTools.Property(recipeDataPairType, "InterfaceElement");
+        private static readonly PropertyInfo pairCanCraftProp = AccessTools.Property(recipeDataPairType, "CanCraft");
         private static readonly MethodInfo getSelectedRecipeIndexMethod = AccessTools.Method(typeof(InventoryGui), "GetSelectedRecipeIndex");
         private static readonly MethodInfo setRecipeMethod = AccessTools.Method(typeof(InventoryGui), "SetRecipe");
 
@@ -149,11 +167,32 @@ namespace ValFilter
             public object Pair; // boxed InventoryGui.RecipeDataPair
             public GameObject Element;
             public Recipe Recipe;
+            public bool CanCraft;
+            public int Index; // position in vanilla's sorted list, the final tiebreaker
+        }
+
+        private struct Match
+        {
+            public Entry Entry;
+            public int Score;
+            public int NameLength;
         }
 
         private static readonly List<Entry> allEntries = new List<Entry>();
-        // Localized, lower-cased item names keyed by token ($item_sword_bronze), so typing doesn't re-localize.
-        private static readonly Dictionary<string, string> searchNameCache = new Dictionary<string, string>();
+        private static readonly List<Match> matches = new List<Match>();
+        // Localized item names keyed by token ($item_sword_bronze), so typing doesn't re-localize.
+        private static readonly Dictionary<string, FuzzyMatcher.Candidate> candidateCache = new Dictionary<string, FuzzyMatcher.Candidate>();
+
+        // Keep vanilla's craftable-first grouping, rank by score within each group, then prefer shorter
+        // names ("Bow" over "Bow of the hunt"), then fall back to vanilla's own order.
+        private static readonly Comparison<Match> byRank = (a, b) =>
+        {
+            int c = b.Entry.CanCraft.CompareTo(a.Entry.CanCraft);
+            if (c == 0) c = b.Score.CompareTo(a.Score);
+            if (c == 0) c = a.NameLength.CompareTo(b.NameLength);
+            if (c == 0) c = a.Entry.Index.CompareTo(b.Entry.Index);
+            return c;
+        };
 
         /// Called before vanilla rebuilds the list: hand back every entry so vanilla destroys all buttons.
         public static void RestoreFullList(InventoryGui gui)
@@ -179,6 +218,8 @@ namespace ValFilter
                     Pair = pair,
                     Element = (GameObject)pairElementProp.GetValue(pair),
                     Recipe = (Recipe)pairRecipeProp.GetValue(pair),
+                    CanCraft = (bool)pairCanCraftProp.GetValue(pair),
+                    Index = allEntries.Count,
                 });
             }
 
@@ -189,18 +230,28 @@ namespace ValFilter
 
         private static void ApplyFilter(InventoryGui gui, bool reselect)
         {
-            var available = (IList)availableRecipesField.GetValue(gui);
-            available.Clear();
+            bool fuzzy = Main.SearchMode.Value == SearchMode.Fuzzy;
+
+            matches.Clear();
             foreach (var entry in allEntries)
             {
-                bool match = Matches(entry.Recipe);
-                entry.Element.SetActive(match);
-                if (!match)
-                    continue;
+                int score = Score(entry.Recipe, fuzzy, out int nameLength);
+                entry.Element.SetActive(score > 0);
+                if (score > 0)
+                    matches.Add(new Match { Entry = entry, Score = score, NameLength = nameLength });
+            }
 
-                ((RectTransform)entry.Element.transform).anchoredPosition =
+            // Substring mode keeps vanilla's order, like the original filter.
+            if (fuzzy && !query.IsEmpty)
+                matches.Sort(byRank);
+
+            var available = (IList)availableRecipesField.GetValue(gui);
+            available.Clear();
+            foreach (var match in matches)
+            {
+                ((RectTransform)match.Entry.Element.transform).anchoredPosition =
                     new Vector2(0f, available.Count * -gui.m_recipeListSpace);
-                available.Add(entry.Pair);
+                available.Add(match.Entry.Pair);
             }
 
             float baseSize = (float)recipeListBaseSizeField.GetValue(gui);
@@ -211,28 +262,48 @@ namespace ValFilter
                 return;
 
             gui.m_recipeListScroll.value = 1f; // back to the top of the list
-            int index = available.Count == 0
-                ? -1
-                : (int)getSelectedRecipeIndexMethod.Invoke(gui, new object[] { true });
+            int index;
+            if (available.Count == 0)
+                index = -1;
+            else if (fuzzy && !query.IsEmpty)
+                index = 0; // best match, so typing then crafting just works
+            else
+                index = (int)getSelectedRecipeIndexMethod.Invoke(gui, new object[] { true });
             setRecipeMethod.Invoke(gui, new object[] { index, false });
         }
 
-        private static bool Matches(Recipe recipe)
+        /// 0 = filtered out; otherwise higher ranks earlier (fuzzy mode only).
+        private static int Score(Recipe recipe, bool fuzzy, out int nameLength)
         {
-            if (string.IsNullOrEmpty(term))
-                return true;
+            nameLength = 0;
+            if (query.IsEmpty)
+                return 1;
 
             var shared = recipe?.m_item?.m_itemData?.m_shared;
             if (shared == null)
-                return false;
+                return 0;
 
-            if (!searchNameCache.TryGetValue(shared.m_name, out var name))
+            if (!candidateCache.TryGetValue(shared.m_name, out var candidate))
             {
-                name = Localization.instance.Localize(shared.m_name).ToLowerInvariant();
-                searchNameCache[shared.m_name] = name;
+                candidate = new FuzzyMatcher.Candidate(Localization.instance.Localize(shared.m_name));
+                candidateCache[shared.m_name] = candidate;
             }
-            return name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0
-                || shared.m_name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0;
+            nameLength = candidate.Text.Length;
+
+            if (fuzzy)
+            {
+                int score = FuzzyMatcher.Score(query, candidate, Main.TypoTolerance.Value);
+                if (score > 0)
+                    return score;
+            }
+            else if (candidate.Text.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return 1;
+            }
+
+            // Last resort: the internal token, e.g. "$item_bronzearrow" (handy if you know the English
+            // name but play in another language). Ranked below everything else.
+            return term.Length >= 3 && shared.m_name.IndexOf(query.Compact, StringComparison.OrdinalIgnoreCase) >= 0 ? 1 : 0;
         }
     }
 
