@@ -1,6 +1,6 @@
 # ValFilter
 
-Github: https://thunderstore.io/c/valheim/p/PlacidFireball/ValFilter/
+GitHub: https://github.com/PlacidFireball/ValFilter
 
 Adds a search box to every crafting station (workbench, forge, cauldron, artisan table, etc.) so you can filter the recipe list by name.
 
@@ -25,4 +25,7 @@ Adds a search box to every crafting station (workbench, forge, cauldron, artisan
 
 ## Changelog
 
+- **0.1.1**
+  - Fixed lag when editing the search with many recipes unlocked.
+  - Plugin GUID changed to `com.placidfireball.valfilter`; settings from 0.1.0 reset to defaults (old `com.jaredweiss.valfilter.cfg` can be deleted).
 - **0.1.0** - Initial release: recipe search box.

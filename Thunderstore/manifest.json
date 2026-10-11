@@ -1,7 +1,7 @@
 {
   "name": "ValFilter",
-  "version_number": "0.1.0",
-  "website_url": "",
+  "version_number": "0.1.1",
+  "website_url": "https://github.com/PlacidFireball/ValFilter",
   "description": "Adds a search box to every crafting station so you can filter recipes by name.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2351"

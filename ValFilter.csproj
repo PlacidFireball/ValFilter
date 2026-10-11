@@ -37,7 +37,7 @@
 
   <PropertyGroup>
     <!-- Keep in sync with pluginVersion in ValFilter.cs and version_number in Thunderstore/manifest.json. -->
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
 
     <!-- Thunderstore Mod Manager profile to deploy into for testing. Override per machine if needed. -->
     <ModProfile Condition="'$(ModProfile)' == ''">Multiplayer With Gavin</ModProfile>
@@ -45,8 +45,10 @@
     <PluginDeployDir>$(ModProfileDir)\BepInEx\plugins\ValFilter</PluginDeployDir>
   </PropertyGroup>
 
-  <!-- Copy the built plugin into the mod manager profile, so "Start modded" picks it up. -->
-  <Target Name="DeployToProfile" AfterTargets="Build" Condition="Exists('$(ModProfileDir)\BepInEx')">
+  <!-- Debug builds: copy the plugin into the mod manager profile, so "Start modded" picks it up.
+       Release builds only package, so they don't clash with a copy installed from Thunderstore.
+       Uninstall the Thunderstore copy before going back to Debug builds, or BepInEx loads both. -->
+  <Target Name="DeployToProfile" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug' And Exists('$(ModProfileDir)\BepInEx')">
     <MakeDir Directories="$(PluginDeployDir)" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" />
     <Message Importance="high" Text="ValFilter -> $(PluginDeployDir)" />

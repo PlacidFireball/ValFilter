@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -15,7 +17,7 @@ namespace ValFilter
     {
         const string pluginGUID = "com.placidfireball.valfilter";
         const string pluginName = "ValFilter";
-        const string pluginVersion = "0.1.0";
+        const string pluginVersion = "0.1.1";
 
         private readonly Harmony HarmonyInstance = new Harmony(pluginGUID);
 
@@ -67,7 +69,7 @@ namespace ValFilter
                 : null;
             if (template == null)
             {
-                Main.logger.LogWarning("Could not find the build menu search searchField to clone; search box not created.");
+                Main.logger.LogWarning("Could not find the build menu search field to clone; search box not created.");
                 return;
             }
 
@@ -122,24 +124,113 @@ namespace ValFilter
             term = value.Trim();
             var gui = InventoryGui.instance;
             if (gui != null && InventoryGui.IsVisible())
-                Traverse.Create(gui).Method("UpdateCraftingPanel", false).GetValue();
+                ApplyFilter(gui, reselect: true);
         }
 
-        public static void Filter(List<Recipe> recipes)
+        // Filtering works on the recipe buttons vanilla already built instead of rebuilding the list.
+        // Rebuilding destroys and re-instantiates a button per recipe, which hitches badly with every
+        // recipe unlocked; toggling and repositioning existing buttons is cheap.
+        //
+        // After vanilla's UpdateRecipeList we snapshot the full sorted m_availableRecipes, then narrow
+        // m_availableRecipes to the matches so selection, clicks and gamepad navigation only see
+        // visible entries. Before the next rebuild we restore the full list so vanilla destroys every
+        // button, hidden ones included.
+
+        private static readonly FieldInfo availableRecipesField = AccessTools.Field(typeof(InventoryGui), "m_availableRecipes");
+        private static readonly FieldInfo recipeListBaseSizeField = AccessTools.Field(typeof(InventoryGui), "m_recipeListBaseSize");
+        private static readonly Type recipeDataPairType = AccessTools.Inner(typeof(InventoryGui), "RecipeDataPair");
+        private static readonly PropertyInfo pairRecipeProp = AccessTools.Property(recipeDataPairType, "Recipe");
+        private static readonly PropertyInfo pairElementProp = AccessTools.Property(recipeDataPairType, "InterfaceElement");
+        private static readonly MethodInfo getSelectedRecipeIndexMethod = AccessTools.Method(typeof(InventoryGui), "GetSelectedRecipeIndex");
+        private static readonly MethodInfo setRecipeMethod = AccessTools.Method(typeof(InventoryGui), "SetRecipe");
+
+        private struct Entry
         {
-            if (string.IsNullOrEmpty(term))
+            public object Pair; // boxed InventoryGui.RecipeDataPair
+            public GameObject Element;
+            public Recipe Recipe;
+        }
+
+        private static readonly List<Entry> allEntries = new List<Entry>();
+        // Localized, lower-cased item names keyed by token ($item_sword_bronze), so typing doesn't re-localize.
+        private static readonly Dictionary<string, string> searchNameCache = new Dictionary<string, string>();
+
+        /// Called before vanilla rebuilds the list: hand back every entry so vanilla destroys all buttons.
+        public static void RestoreFullList(InventoryGui gui)
+        {
+            if (allEntries.Count == 0)
                 return;
 
-            recipes.RemoveAll(r => !Matches(r));
+            var available = (IList)availableRecipesField.GetValue(gui);
+            available.Clear();
+            foreach (var entry in allEntries)
+                available.Add(entry.Pair);
+            allEntries.Clear();
+        }
+
+        /// Called after vanilla rebuilds the list: snapshot it, then apply the current filter.
+        public static void CaptureAndFilter(InventoryGui gui)
+        {
+            allEntries.Clear();
+            foreach (var pair in (IList)availableRecipesField.GetValue(gui))
+            {
+                allEntries.Add(new Entry
+                {
+                    Pair = pair,
+                    Element = (GameObject)pairElementProp.GetValue(pair),
+                    Recipe = (Recipe)pairRecipeProp.GetValue(pair),
+                });
+            }
+
+            // UpdateCraftingPanel picks the selected recipe itself right after UpdateRecipeList returns.
+            if (!string.IsNullOrEmpty(term))
+                ApplyFilter(gui, reselect: false);
+        }
+
+        private static void ApplyFilter(InventoryGui gui, bool reselect)
+        {
+            var available = (IList)availableRecipesField.GetValue(gui);
+            available.Clear();
+            foreach (var entry in allEntries)
+            {
+                bool match = Matches(entry.Recipe);
+                entry.Element.SetActive(match);
+                if (!match)
+                    continue;
+
+                ((RectTransform)entry.Element.transform).anchoredPosition =
+                    new Vector2(0f, available.Count * -gui.m_recipeListSpace);
+                available.Add(entry.Pair);
+            }
+
+            float baseSize = (float)recipeListBaseSizeField.GetValue(gui);
+            float height = Mathf.Max(baseSize, available.Count * gui.m_recipeListSpace);
+            gui.m_recipeListRoot.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, height);
+
+            if (!reselect)
+                return;
+
+            gui.m_recipeListScroll.value = 1f; // back to the top of the list
+            int index = available.Count == 0
+                ? -1
+                : (int)getSelectedRecipeIndexMethod.Invoke(gui, new object[] { true });
+            setRecipeMethod.Invoke(gui, new object[] { index, false });
         }
 
         private static bool Matches(Recipe recipe)
         {
+            if (string.IsNullOrEmpty(term))
+                return true;
+
             var shared = recipe?.m_item?.m_itemData?.m_shared;
             if (shared == null)
                 return false;
 
-            string name = Localization.instance.Localize(shared.m_name);
+            if (!searchNameCache.TryGetValue(shared.m_name, out var name))
+            {
+                name = Localization.instance.Localize(shared.m_name).ToLowerInvariant();
+                searchNameCache[shared.m_name] = name;
+            }
             return name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0
                 || shared.m_name.IndexOf(term, StringComparison.OrdinalIgnoreCase) >= 0;
         }
@@ -170,7 +261,9 @@ namespace ValFilter
     [HarmonyPatch(typeof(InventoryGui), "UpdateRecipeList")]
     internal static class InventoryGui_UpdateRecipeList_Patch
     {
-        private static void Prefix(List<Recipe> recipes) => RecipeSearch.Filter(recipes);
+        private static void Prefix(InventoryGui __instance) => RecipeSearch.RestoreFullList(__instance);
+
+        private static void Postfix(InventoryGui __instance) => RecipeSearch.CaptureAndFilter(__instance);
     }
 
     /// The game suppresses hotkeys (inventory close, hotbar 1-8, movement, camera) while chat has focus.
