@@ -1,5 +1,7 @@
 # ValFilter
 
+Github: https://thunderstore.io/c/valheim/p/PlacidFireball/ValFilter/
+
 Adds a search box to every crafting station (workbench, forge, cauldron, artisan table, etc.) so you can filter the recipe list by name.
 
 ## Features
